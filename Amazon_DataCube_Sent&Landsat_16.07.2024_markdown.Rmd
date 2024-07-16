@@ -1,0 +1,721 @@
+---
+title: "AmazonDataCubeR"
+author: "Ross Brown"
+date: '2024-01-15'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r}
+# Landsat 8 data was aquired here: https://espa.cr.usgs.gov/
+library(terra)
+library(R.utils)
+library(plyr)
+library(raster)
+library(gdalcubes)   #main package
+library(stars)
+library(RColorBrewer)
+gdalcubes_options(parallel = 8)
+packageVersion("gdalcubes")
+
+# I couldn't figure out an efficient way to unzip and untar all of the images while keeping the file hierachy, so I used 7-zip
+# NOTE: you must unzip and untar the images
+#Useful GDAL tutorial: https://gdalcubes.github.io/source/tutorials/Landsat8_getting_started/Landsat8_getting_started.html#exercises-i
+
+# allan unzip code
+```
+
+Image collections formats for supported data - I made my own since naming conventions were not the same
+```{r}
+collection_formats()
+```
+
+Checking the extent on the subarea so that images will be zoomed to the FACE site
+```{r}
+trial.files = list.files("D:/RossBrown/Landsat8&9_FACE_C2L2/Trial", pattern = ".tif", recursive = TRUE, full.names = TRUE) 
+sum(file.size(trial.files)) / 1000^3 # gigabytes
+
+trial.col = create_image_collection(trial.files, format = "C:/Users/rband/OneDrive - University of Virginia/Documents/TUM LSAI/Amazon FACE/R-Code/L8_SR_RB.json", out_file = "trialCol.db")
+trial.col
+#extent(trial.col, srs="EPSG:4326")
+
+```
+Full extent of the passing in RGB and downsampled to 500m resolution. 1 year (2013) median average
+```{r}
+v = cube_view(srs="EPSG:3857", extent=trial.col, dx=500, dy=500, dt = "P1Y", resampling="median", aggregation="median")
+
+print(v)
+
+L8.clear_mask = image_mask("PIXEL_QA", values=c(21824, 21826, 21888, 21890, 54596, 54852, 55052, 22080, 22144, 23888, 23952, 24088, 24216, 24344, 24472, 30048), invert = TRUE)
+
+trial.cube = select_bands(raster_cube(trial.col, v, mask = L8.clear_mask), c("B02","B03","B04")) 
+trial.cube
+
+```
+
+Partial extent (FACE site) in RGB and with full 30m resolution. 1 year (2013) median average and createing QA Mask 
+```{r}
+z = cube_view(extent=list(left=-6706000, right=-6698000, bottom=-294000, top=-288000, 
+   t0="2013-01-01", t1="2013-12-31"), dt="P1Y", dx=30, dy=30, srs="EPSG:3857", 
+   aggregation = "median", resampling = "average")
+
+zz = cube_view(extent=list(left=-6706010, right=-6698000, bottom=-294000, top=-288000, 
+   t0="2013-01-01", t1="2013-12-31"), dt="P1Y", dx=30, dy=30, srs="EPSG:3857", 
+   aggregation = "median", resampling = "average")
+print(z)
+
+# Pixel QA values can be found in the Landsat 8 Handbook
+# Even with all values except for 22280 (which added clouds) there is still cloud interference 
+L8.clear_mask = image_mask("PIXEL_QA", values=c(21824, 21826, 21888, 21890, 54596, 54852, 55052, 22080, 22144, 23888, 23952, 24088, 24216, 24344, 24472, 30048), invert = TRUE)
+
+
+trial.cube.z = raster_cube(trial.col, z, mask = L8.clear_mask) 
+trial.cube.z = select_bands(trial.cube.z, c("B02","B03","B04"))
+
+trial.cube.z
+
+trial.cube.zz = raster_cube(trial.col, zz, mask = L8.clear_mask) 
+trial.cube.zz = select_bands(trial.cube.zz, c("B02","B03","B04"))
+```
+
+
+
+Full extent 500m - no QA mask 
+```{r}
+plot(x = trial.cube, rgb = 3:1, main = "Manaus RGB",zlim = c(6000,18000))
+
+```
+
+Now just Narrow Extent 
+```{r}
+plot(x = trial.cube.z, rgb = 3:1, zlim = c(6000,18000))
+
+```
+```{r}
+plot(x = trial.cube.zz, rgb = 3:1, zlim = c(6000,18000))
+
+```
+
+ 
+testing out NDVI and EVI 
+```{r}
+trial.cube.NDVI = select_bands(raster_cube(trial.col, z, mask = L8.clear_mask), c("NDVI")) 
+trial.cube.NDVI
+
+trial.cube.EVI = select_bands(raster_cube(trial.col, z, mask = L8.clear_mask), c("EVI")) 
+trial.cube.EVI
+```
+
+```{r}
+plot(x = trial.cube.EVI, zlim = c(3000,7000), key.pos=1, col=viridis::viridis)
+plot(x = trial.cube.NDVI, zlim = c(5000,10000), key.pos=1, col=viridis::viridis)
+```
+
+Creating an Image Collection for the full temporal extent 
+```{r}
+# scenes were chosen 2013-2023 with less than 30% cloud cover
+L8.files = list.files("D:/RossBrown/Landsat8&9_FACE_C2L2/UntaredLandsa8&9_ready2use", pattern = ".tif", recursive = TRUE, full.names = TRUE) 
+head(L8.files, 25)
+
+sum(file.size(L8.files)) / 1000^3 # gigabytes
+
+# The creation of image collections is typically done only once. We can add images to an existing collection with add_images()
+# I used my own collection format (L8_SR_RB.json) which I just had to use the file path
+
+L8.col = create_image_collection(L8.files, format = "C:/Users/rband/OneDrive - University of Virginia/Documents/TUM LSAI/Amazon FACE/R-Code/L8_SR_RB.json", out_file = "L8.db")
+L8.col = image_collection("L8.db") 
+L8.col
+```
+
+
+View spatiotemporal extent of the collection
+```{r}
+extent(L8.col, srs="EPSG:4326")
+```
+
+Plotting all years in limited extent RGB 
+```{r}
+L8.cube.cropped = cube_view(extent=list(left=-6706000, right=-6698000, bottom=-294000, top=-288000,
+   t0="2015-01-01", t1="2023-12-31"), dt="P1Y", dx=30, dy=30, srs="EPSG:3857", 
+   aggregation = "median", resampling = "average")
+# More zoomed in extent: left=-67060010, right=-6698000, bottom=-294000, top=-288000
+
+L8.cube.fullT = raster_cube(L8.col, L8.cube.cropped, mask = L8.clear_mask)
+
+L8.cube.rgb = select_bands(raster_cube(L8.col, L8.cube.cropped, mask = L8.clear_mask), c("B02","B03","B04")) 
+plot(x = L8.cube.rgb, rgb = 3:1, zlim = c(6000,18000))
+```
+Polotting all years in limited extent EVI 
+```{r}
+L8.cube.EVI = select_bands(raster_cube(L8.col, L8.cube.cropped, mask = L8.clear_mask), c("EVI")) 
+
+plot(x = L8.cube.EVI, zlim = c(3000,7000), key.pos=1, col=viridis::viridis)
+```
+
+
+
+
+Creating cube views and raster cubes for time series graphs
+```{r}
+L8.extent.scatter = cube_view(extent=list(left=-67060010, right=-6698000, bottom=-294000, top=-288000, t0="2013-01-01", t1="2023-12-31"), dt="P1M", dx=30, dy=30, srs="EPSG:3857", aggregation = "median", resampling = "average")
+
+raster_cube(L8.col, L8.extent.scatter,  mask=L8.clear_mask) |>
+  select_bands(c("B04","B05")) |>
+  apply_pixel("(B05-B04)/(B05+B04)", names = "NDVI") |>
+  reduce_space("median(NDVI)", "sd(NDVI)") |>
+  plot()
+
+```
+
+```{r}
+  raster_cube(L8.col, L8.extent.scatter,  mask=L8.clear_mask) |>
+  select_bands("EVI") |>
+  reduce_space("median(EVI)", "sd(EVI)") |>
+  plot()
+```
+Count of the pixels throughout the time series - low counts in months of 2016 and 2018 due to cloud cover
+```{r}
+raster_cube(L8.col, cube_view(view=L8.cube.cropped, dt="P1M"), mask=L8.clear_mask) |>
+  select_bands("EVI") |>
+  reduce_space("count(EVI)") |>
+  plot()
+```
+
+Exporting a data cube: netCDF files, or as a collection of GeoTIFF files, where each time-slice of a cube will be stored as one (multiband) file 
+```{r}
+export.cube = raster_cube(L8.col, L8.cube.cropped, mask = L8.clear_mask)
+
+gdalcubes_options(ncdf_compression_level = 1)
+write_ncdf(export.cube, file.path("D:/RossBrown/Landsat8&9_FACE_C2L2", basename(tempfile(fileext = ".nc"))))
+gdalcubes_options(ncdf_compression_level = 0)
+```
+
+Adding polygons to study sites (this at 20m buffer zone compared to 30m shown later)
+```{r}
+library(sf)
+
+
+plot(multipleSitesGPKG)
+plot(controlSitesGPKG)
+
+amzn_shape = st_read(file.path("C:/Users/rband/OneDrive - University of Virginia/Documents/TUM LSAI/Amazon FACE/AmazonFACEshp/30m"))
+controlSitesGPKG = st_read(file.path("C:/Users/rband/OneDrive - University of Virginia/Documents/TUM LSAI/Amazon FACE/R-Code/FACEcontrolPolygons.gpkg"))
+
+plot(multipleSitesGPKG)
+plot(controlSitesGPKG)
+
+bbox = st_bbox(amzn_shape) 
+bbox
+
+amzn_shape |>
+  st_transform("EPSG:4326") |>    # landsat version ESPG: 3857 
+  st_bbox() -> bbox_wgs84         # ^- I'm not too sure it matters much since it is a projection  
+bbox_wgs84
+
+st_as_sfc(bbox) |>
+  st_transform("EPSG:32633") |>
+  st_bbox() -> bbox_utm
+
+plot(bbox_wgs84)
+plot(amzn_shape)
+```
+
+Time series graphs - Crop polygons and export as ncdf
+```{r}
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeGEOM = raster_cube(L8.col, L8.extent.scatter,  mask=L8.clear_mask) |>
+              select_bands("EVI") |>
+              filter_geom(multipleSitesGPKG$Shape) |>
+              write_ncdf("EVIpolygons_landsat_monthly.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeCntrl = raster_cube(L8.col, L8.extent.scatter,  mask=L8.clear_mask) |>
+               filter_geom(controlSitesGPKG$Shape) |>
+               write_ncdf("EVIpolygons_CNTRL_landsat_monthly.nc",overwrite = TRUE)
+
+```
+Time series graphs - plot for polygon Sites and control sites 
+```{r}
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_landsat_monthly.nc") |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10000", names = "Amazon FACE Plots EVI") |>
+  reduce_space("median(Amazon FACE Plots EVI)") |>
+  plot(pch = 19, col = 4, ylim = c(0.20, 0.60))
+
+  
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_CNTRL_landsat_monthly.nc") |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10000", names = "Random Control Plots EVI") |>
+  reduce_space("median(Random Control Plots EVI)") |>
+  plot(pch = 19, col = 3, ylim = c(0.20, 0.60))
+
+```
+
+```{r}
+#Plot 1 
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeGEOM_Landsat = raster_cube(L8.col, L8.extent.scatter,  mask=L8.clear_mask) |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10000", names = "Amazon FACE Plot 1 EVI Landsat") |>
+  select_bands("Amazon FACE Plot 1 EVI Landsat") |>
+  filter_geom(amzn_shape$geometry[1]) |>
+  write_ncdf("EVIpolygons_Landsat_plot1.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_Landsat_plot1.nc") |>
+  select_bands("Amazon FACE Plot 1 EVI Landsat") |>
+  reduce_space("median(Amazon FACE Plot 1 EVI Landsat)") |>
+  plot(pch = 19, col = 4, ylim = c(-0.20, 0.90))
+
+```
+
+```{r}
+#Plot 2
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeGEOM_Landsat = raster_cube(L8.col, L8.extent.scatter,  mask=L8.clear_mask) |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10000", names = "Amazon FACE Plot 2 EVI Landsat") |>
+  select_bands("Amazon FACE Plot 2 EVI Landsat") |>
+  filter_geom(amzn_shape$geometry[2]) |>
+  write_ncdf("EVIpolygons_Landsat_plot2.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_Landsat_plot2.nc") |>
+  select_bands("Amazon FACE Plot 2 EVI Landsat") |>
+  reduce_space("median(Amazon FACE Plot 2 EVI Landsat)") |>
+  plot(pch = 19, col = 4, ylim = c(-0.20, 0.90))
+
+```
+
+```{r}
+#Plot 3
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeGEOM_Landsat = raster_cube(L8.col, L8.extent.scatter,  mask=L8.clear_mask) |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10000", names = "Amazon FACE Plot 3 EVI Landsat") |>
+  select_bands("Amazon FACE Plot 3 EVI Landsat") |>
+  filter_geom(amzn_shape$geometry[3]) |>
+  write_ncdf("EVIpolygons_Landsat_plot3.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_Landsat_plot3.nc") |>
+  select_bands("Amazon FACE Plot 3 EVI Landsat") |>
+  reduce_space("median(Amazon FACE Plot 3 EVI Landsat)") |>
+  plot(pch = 19, col = 4, ylim = c(-0.20, 0.90))
+
+```
+
+```{r}
+#Plot 4 
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeGEOM_Landsat = raster_cube(L8.col, L8.extent.scatter,  mask=L8.clear_mask) |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10000", names = "Amazon FACE Plot 4 EVI Landsat") |>
+  select_bands("Amazon FACE Plot 4 EVI Landsat") |>
+  filter_geom(amzn_shape$geometry[4]) |>
+  write_ncdf("EVIpolygons_Landsat_plot4.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_Landsat_plot4.nc") |>
+  select_bands("Amazon FACE Plot 4 EVI Landsat") |>
+  reduce_space("median(Amazon FACE Plot 4 EVI Landsat)") |>
+  plot(pch = 19, col = 4, ylim = c(-0.20, 0.90))
+
+```
+
+```{r}
+#Plot 5
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeGEOM_Landsat = raster_cube(L8.col, L8.extent.scatter,  mask=L8.clear_mask) |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10000", names = "Amazon FACE Plot 5 EVI Landsat") |>
+  select_bands("Amazon FACE Plot 5 EVI Landsat") |>
+  filter_geom(amzn_shape$geometry[5]) |>
+  write_ncdf("EVIpolygons_Landsat_plot5.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_Landsat_plot5.nc") |>
+  select_bands("Amazon FACE Plot 5 EVI Landsat") |>
+  reduce_space("median(Amazon FACE Plot 5 EVI Landsat)") |>
+  plot(pch = 19, col = 4, ylim = c(-0.20, 0.90))
+
+```
+
+```{r}
+#Plot 6
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeGEOM_Landsat = raster_cube(L8.col, L8.extent.scatter,  mask=L8.clear_mask) |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10000", names = "Amazon FACE Plot 6 EVI Landsat") |>
+  select_bands("Amazon FACE Plot 6 EVI Landsat") |>
+  filter_geom(amzn_shape$geometry[6]) |>
+  write_ncdf("EVIpolygons_Landsat_plot6.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_Landsat_plot6.nc") |>
+  select_bands("Amazon FACE Plot 6 EVI Landsat") |>
+  reduce_space("median(Amazon FACE Plot 6 EVI Landsat)") |>
+  plot(pch = 19, col = 4, ylim = c(-0.20, 0.90))
+
+```
+
+
+Allan comments: 3/4/2024
+- Data fusion with modis and sentinel 
+- Remove outliers and create the best samples from all data available
+
+david talk 4/10/2024
+- ceritfy geographic location -> then we can start upgrading data types
+- main towers being built this year. Some of the smaller ones since 2019
+- dmlapola@unicamp.br
+
+- look also into the platau 
+
+- look into the seasonality thorughout the year for all years for both scales 
+- maybe look into more products like soil moisture and surface TEMP
+
+- look into moving it to the cloud 
+
+
+
+                    ---------------- Start of Sentinel 2 imagery -----------------------
+
+loading in FACE site shapefiles 
+```{r}
+amzn_shape = st_read(file.path("C:/Users/rband/OneDrive - University of Virginia/Documents/TUM LSAI/Amazon FACE/AmazonFACEshp/30m"))
+
+
+bbox = st_bbox(amzn_shape) 
+bbox
+
+amzn_shape |>
+  st_transform("EPSG:4326") |>    # landsat version ESPG: 3857 
+  st_bbox() -> bbox_wgs84         # ^- I'm not too sure it matters much since it is a projection  
+bbox_wgs84
+
+plot(bbox_wgs84)
+plot(amzn_shape)
+```
+
+
+Creating boundry box and quering STAC cloud images - ?Sen2cor package for data processing?
+```{r}
+library(rstac)
+s = stac("https://earth-search.aws.element84.com/v0")
+
+items <- s |>
+    stac_search(collections = "sentinel-s2-l2a-cogs",
+                bbox = c(bbox["xmin"],bbox["ymin"],bbox["xmax"],bbox["ymax"]), 
+                datetime = "2017-04-01/2023-12-31",
+                limit = 500) |>
+    post_request() 
+items
+
+# Date and time of first and last images
+range(sapply(items$features, function(x) {x$properties$datetime}))
+```
+
+Creating an image collection from the STAC 
+```{r}
+assets = c("B01","B02","B03","B04","B05","B06", "B07","B08","B8A","B09","B11","SCL")
+s2_collection = stac_image_collection(items$features, asset_names = assets, property_filter = function(x) {x[["eo:cloud_cover"]] < 20}) 
+s2_collection
+```
+
+Creating Cube Views 
+```{r}
+st_as_sfc(bbox) |>
+  st_transform("EPSG:32633") |>
+  st_bbox() -> bbox_utm
+
+
+v = cube_view(srs = "EPSG:32633", extent = list(t0 = "2022-05", t1 = "2022-09", dt="P1M", 
+              left = bbox_utm["xmin"] - 10, right = bbox_utm["xmax"] + 10,
+              bottom = bbox_utm["ymin"] - 10, top = bbox_utm["ymax"] + 10), 
+              dx = 10, dy = 10, dt = "P1M", aggregation = "median", resampling = "average")
+v
+
+v_fullt = cube_view(srs = "EPSG:32633", extent = list(t0 = "2017-04-01", t1 = "2023-12-31", dt="P1D", 
+              left = bbox_utm["xmin"] - 10, right = bbox_utm["xmax"] + 10,
+              bottom = bbox_utm["ymin"] - 10, top = bbox_utm["ymax"] + 10), 
+              dx = 10, dy = 10, dt = "P1M", aggregation = "median", resampling = "average")
+```
+
+3 months in 2022 exent median reductions
+```{r}
+s2.mask = image_mask("SCL", values = c(3,8,9))
+
+
+raster_cube(s2_collection, v, mask = s2.mask ) |>
+  select_bands(c("B02","B03","B04")) |>
+  reduce_time(c("median(B02)", "median(B03)", "median(B04)")) |>
+  plot(rgb = 3:1, zlim = c(0,2500))
+
+
+raster_cube(s2_collection, v,  mask = s2.mask ) |>
+  select_bands(c("B02","B04","B08")) |>
+  apply_pixel("2.5 * ((B08 - B04) / (B08 + 6 * B04 - 7.5 * B02 + 1))", names = "EVI") |>
+  reduce_time("median(EVI)")|>
+  plot(key.pos = 1,col = viridis::viridis, zlim = c(1,5))
+
+
+
+raster_cube(s2_collection, v, mask = s2.mask ) |>
+  select_bands(c("B04","B08")) |>
+  apply_pixel("(B08 - B04) / (B08 + B04)", names = "NDVI") |>
+  reduce_time("median(NDVI)")|>
+  plot(key.pos = 1,col = viridis::viridis, zlim = c(0.5,1))
+```
+
+Full temporal exent median reductions - probs not that informative  
+```{r}
+raster_cube(s2_collection, v_fullt, mask = s2.mask ) |>
+  select_bands(c("B02","B03","B04")) |>
+  reduce_time(c("median(B02)", "median(B03)", "median(B04)")) |>
+  plot(rgb = 3:1, zlim = c(0,2500))
+
+
+raster_cube(s2_collection, v_fullt, mask = s2.mask ) |>
+  select_bands(c("B02","B04","B08")) |>
+  apply_pixel("2.5 * ((B08 - B04) / (B08 + 6 * B04 - 7.5 * B02 + 1))", names = "EVI") |>
+  reduce_time("median(EVI)")|>
+  plot(key.pos = 1,col = viridis::viridis, zlim = c(0,5))
+
+
+
+raster_cube(s2_collection, v_fullt, mask = s2.mask ) |>
+  select_bands(c("B04","B08")) |>
+  apply_pixel("(B08 - B04) / (B08 + B04)", names = "NDVI") |>
+  reduce_time("median(NDVI)")|>
+  plot(key.pos = 1,col = viridis::viridis, zlim = c(0.5,1))
+```
+
+Time Series NDVI  Graphs - Crop polygons and export as ncdf then plot for each site
+```{r}
+#Plot 1 
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+NDVICubeGEOM_sent = raster_cube(s2_collection, v_fullt, mask = s2.mask ) |>
+  select_bands(c("B04","B08")) |>
+  apply_pixel("(B08 - B04) / (B08 + B04)", names = "NDVI") |>
+  select_bands("NDVI") |>
+  filter_geom(amzn_shape$geometry[1]) |>
+  write_ncdf("NDVIpolygons_Sent_plot1.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("NDVIpolygons_Sent_plot1.nc") |>
+  select_bands("NDVI") |>
+  apply_pixel("NDVI", names = "Amazon FACE Plot 1 NDVI Sentinel") |>
+  reduce_space("median(Amazon FACE Plot 1 NDVI Sentinel)") |>
+  plot(pch = 19, col = 4, ylim = c(0, 1))
+```
+```{r}
+#Plot 2
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+NDVICubeGEOM_sent = raster_cube(s2_collection, v_fullt, mask = s2.mask ) |>
+  select_bands(c("B04","B08")) |>
+  apply_pixel("(B08 - B04) / (B08 + B04)", names = "NDVI") |>
+  select_bands("NDVI") |>
+  filter_geom(amzn_shape$geometry[2]) |>
+  write_ncdf("NDVIpolygons_Sent_plot2.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("NDVIpolygons_Sent_plot2.nc") |>
+  select_bands("NDVI") |>
+  apply_pixel("NDVI", names = "Amazon FACE Plot 2 NDVI Sentinel") |>
+  reduce_space("median(Amazon FACE Plot 2 NDVI Sentinel)") |>
+  plot(pch = 19, col = 4, ylim = c(0, 1))
+```
+
+```{r}
+#Plot 3
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+NDVICubeGEOM_sent = raster_cube(s2_collection, v_fullt, mask = s2.mask ) |>
+  select_bands(c("B04","B08")) |>
+  apply_pixel("(B08 - B04) / (B08 + B04)", names = "NDVI") |>
+  select_bands("NDVI") |>
+  filter_geom(amzn_shape$geometry[3]) |>
+  write_ncdf("NDVIpolygons_Sent_plot3.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("NDVIpolygons_Sent_plot3.nc") |>
+  select_bands("NDVI") |>
+  apply_pixel("NDVI", names = "Amazon FACE Plot 3 NDVI Sentinel") |>
+  reduce_space("median(Amazon FACE Plot 3 NDVI Sentinel)") |>
+  plot(pch = 19, col = 4, ylim = c(0, 1))
+```
+
+```{r}
+#Plot 4
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+NDVICubeGEOM_sent = raster_cube(s2_collection, v_fullt, mask = s2.mask ) |>
+  select_bands(c("B04","B08")) |>
+  apply_pixel("(B08 - B04) / (B08 + B04)", names = "NDVI") |>
+  select_bands("NDVI") |>
+  filter_geom(amzn_shape$geometry[4]) |>
+  write_ncdf("NDVIpolygons_Sent_plot4.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("NDVIpolygons_Sent_plot4.nc") |>
+  select_bands("NDVI") |>
+  apply_pixel("NDVI", names = "Amazon FACE Plot 4 NDVI Sentinel") |>
+  reduce_space("median(Amazon FACE Plot 4 NDVI Sentinel)") |>
+  plot(pch = 19, col = 4, ylim = c(0, 1))
+```
+
+```{r}
+#Plot 5
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+NDVICubeGEOM_sent = raster_cube(s2_collection, v_fullt, mask = s2.mask ) |>
+  select_bands(c("B04","B08")) |>
+  apply_pixel("(B08 - B04) / (B08 + B04)", names = "NDVI") |>
+  select_bands("NDVI") |>
+  filter_geom(amzn_shape$geometry[5]) |>
+  write_ncdf("NDVIpolygons_Sent_plot5.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("NDVIpolygons_Sent_plot5.nc") |>
+  select_bands("NDVI") |>
+  apply_pixel("NDVI", names = "Amazon FACE Plot 5 NDVI Sentinel") |>
+  reduce_space("median(Amazon FACE Plot 5 NDVI Sentinel)") |>
+  plot(pch = 19, col = 4, ylim = c(0, 1))
+```
+
+```{r}
+#Plot 6
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+NDVICubeGEOM_sent = raster_cube(s2_collection, v_fullt, mask = s2.mask ) |>
+  select_bands(c("B04","B08")) |>
+  apply_pixel("(B08 - B04) / (B08 + B04)", names = "NDVI") |>
+  select_bands("NDVI") |>
+  filter_geom(amzn_shape$geometry[6]) |>
+  write_ncdf("NDVIpolygons_Sent_plot6.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("NDVIpolygons_Sent_plot6.nc") |>
+  select_bands("NDVI") |>
+  apply_pixel("NDVI", names = "Amazon FACE Plot 6 NDVI Sentinel") |>
+  reduce_space("median(Amazon FACE Plot 6 NDVI Sentinel)") |>
+  plot(pch = 19, col = 4, ylim = c(0, 1))
+```
+
+
+Time Series EVI Graphs - Crop polygons and export as ncdf then plot for each site
+```{r}
+#Plot 1 
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeGEOM_sent = raster_cube(s2_collection,  v_fullt, mask = s2.mask ) |>
+  select_bands(c("B02","B04","B08")) |>
+  apply_pixel("2.5 * ((B08 - B04) / (B08 + 6 * B04 - 7.5 * B02 + 1))", names = "EVI") |>
+  select_bands("EVI") |>
+  filter_geom(amzn_shape$geometry[1]) |>
+  write_ncdf("EVIpolygons_Sent_plot1.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_Sent_plot1.nc") |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10", names = "Amazon FACE Plot 1 EVI Sentinel") |>
+  reduce_space("median(Amazon FACE Plot 1 EVI Sentinel)") |>
+  plot(pch = 19, col = 4, ylim = c(-0.40, 0.90))
+```
+```{r}
+#plot 2 
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeGEOM_sent = raster_cube(s2_collection,  v_fullt, mask = s2.mask ) |>
+  select_bands(c("B02","B04","B08")) |>
+  apply_pixel("2.5 * ((B08 - B04) / (B08 + 6 * B04 - 7.5 * B02 + 1))", names = "EVI") |>
+  select_bands("EVI") |>
+  filter_geom(amzn_shape$geometry[2]) |>
+  write_ncdf("EVIpolygons_Sent_plot2.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_Sent_plot2.nc") |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10", names = "Amazon FACE Plot 2 EVI Sentinel") |>
+  reduce_space("median(Amazon FACE Plot 2 EVI Sentinel)") |>
+  plot(pch = 19, col = 4, ylim = c(-0.40, 0.90))
+```
+```{r}
+#plot 3
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeGEOM_sent = raster_cube(s2_collection,  v_fullt,  mask = s2.mask ) |>
+  select_bands(c("B02","B04","B08")) |>
+  apply_pixel("2.5 * ((B08 - B04) / (B08 + 6 * B04 - 7.5 * B02 + 1))", names = "EVI") |>
+  select_bands("EVI") |>
+  filter_geom(amzn_shape$geometry[3]) |>
+  write_ncdf("EVIpolygons_Sent_plot3.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_Sent_plot3.nc") |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10", names = "Amazon FACE Plot 3 EVI Sentinel") |>
+  reduce_space("median(Amazon FACE Plot 3 EVI Sentinel)") |>
+  plot(pch = 19, col = 4, ylim = c(-0.40, 0.90))
+```
+```{r}
+#plot 4 
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeGEOM_sent = raster_cube(s2_collection,  v_fullt, mask = s2.mask ) |>
+  select_bands(c("B02","B04","B08")) |>
+  apply_pixel("2.5 * ((B08 - B04) / (B08 + 6 * B04 - 7.5 * B02 + 1))", names = "EVI") |>
+  select_bands("EVI") |>
+  filter_geom(amzn_shape$geometry[4]) |>
+  write_ncdf("EVIpolygons_Sent_plot4.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_Sent_plot4.nc") |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10", names = "Amazon FACE Plot 4 EVI Sentinel") |>
+  reduce_space("median(Amazon FACE Plot 4 EVI Sentinel)") |>
+  plot(pch = 19, col = 4, ylim = c(-0.40, 0.90))
+```
+```{r}
+#plot 5
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeGEOM_sent = raster_cube(s2_collection,  v_fullt,  mask = s2.mask ) |>
+  select_bands(c("B02","B04","B08")) |>
+  apply_pixel("2.5 * ((B08 - B04) / (B08 + 6 * B04 - 7.5 * B02 + 1))", names = "EVI") |>
+  select_bands("EVI") |>
+  filter_geom(amzn_shape$geometry[5]) |>
+  write_ncdf("EVIpolygons_Sent_plot5.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_Sent_plot5.nc") |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10", names = "Amazon FACE Plot 5 EVI Sentinel") |>
+  reduce_space("median(Amazon FACE Plot 5 EVI Sentinel)") |>
+  plot(pch = 19, col = 4, ylim = c(-0.40, 0.90))
+```
+```{r}
+#plot 6 
+gdalcubes_options(parallel = 8, ncdf_compression_level = 5)
+EVICubeGEOM_sent = raster_cube(s2_collection,  v_fullt,  mask = s2.mask ) |>
+  select_bands(c("B02","B04","B08")) |>
+  apply_pixel("2.5 * ((B08 - B04) / (B08 + 6 * B04 - 7.5 * B02 + 1))", names = "EVI") |>
+  select_bands("EVI") |>
+  filter_geom(amzn_shape$geometry[6]) |>
+  write_ncdf("EVIpolygons_Sent_plot6.nc",overwrite = TRUE)
+
+gdalcubes_options(parallel = 8)
+ncdf_cube("EVIpolygons_Sent_plot6.nc") |>
+  select_bands("EVI") |>
+  apply_pixel("EVI/10", names = "Amazon FACE Plot 6 EVI Sentinel") |>
+  reduce_space("median(Amazon FACE Plot 6 EVI Sentinel)") |>
+  plot(pch = 19, col = 4, ylim = c(-0.40, 0.90))
+
+```
+
+
+
+Modis Imagery 
+```{r}
+modis.files = list.files("D:/RossBrown/AmazonFACE_Modis", pattern = ".hdf", recursive = TRUE, full.names = TRUE) 
+sum(file.size(modis.files)) / 1000^3 # gigabytes
+```
+```{r}
+modis.col = create_image_collection(modis.files, format = "C:/Users/rband/OneDrive - University of Virginia/Documents/TUM LSAI/Amazon FACE/R-Code/MODIS17_500m_AmazonFACE.json", out_file = "modis.db")
+modis.col
+```
+
